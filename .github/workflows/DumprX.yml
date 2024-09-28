@@ -1,4 +1,4 @@
-name: DumprX
+name: FirmXtract
  
 on:
   workflow_dispatch:
@@ -61,8 +61,8 @@ jobs:
               mkdir -p ~/.ssh
               ssh-keyscan -t rsa github.com >> ~/.ssh/known_hosts
               ssh-keyscan -t rsa gitlab.com >> ~/.ssh/known_hosts
-              git config --global user.name "atharvnegi"
-              git config --global user.email "atharvnegi2951@gmail.com"
+              git config --global user.name "Galax1eo"
+              git config --global user.email "galaxieodelight@gmail.com"
 
        - name: Setup Config envs
          working-directory: DumprX
