@@ -1,18 +1,20 @@
 name: FirmXtract
- 
+
 on:
   workflow_dispatch:
     inputs:
       ROM_URL:
         description: "Direct Link of the ROM/Firmware to Dump"
         required: true
-       # Requester
       USER_NAME:
         description: "Telegram Username of Who Requested The Dump"
         required: false
       EXTRA_CMD:
         description: "Any Extra Command to Run Before Dump"
         required: false
+  pull_request:
+    branches:
+      - main  # Only allow triggering on main branch PRs
 
 defaults:
   run:
@@ -20,14 +22,14 @@ defaults:
 
 env:
   # ROM
-  ROM_URL: ${{ github.event.inputs.ROM_URL }}
+  ROM_URL: ${{ github.event.inputs.ROM_URL || github.event.pull_request.body }}
   # Requester
-  USERNAME: ${{ github.event.inputs.USERNAME }}
+  USERNAME: ${{ github.event.inputs.USERNAME || 'Unknown' }}
   # Gitlab
   PUSH_TO_GITLAB: true
 
   # Extra Command
-  EXTRA_CMD: ${{ github.event.inputs.EXTRA_CMD }}
+  EXTRA_CMD: ${{ github.event.inputs.EXTRA_CMD || '' }}
 
 jobs:
   build:
@@ -38,37 +40,40 @@ jobs:
          run: |
                WORKFLOW_URL="https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
                echo "WORKFLOW_URL=$WORKFLOW_URL" >> $GITHUB_ENV
-       - name: Give the user the run link
+       - name: Notify Telegram About PR Workflow Start
          run: |
-               curl -s -X POST https://api.telegram.org/bot${{ secrets.TELEGRAM_TOKEN }}/sendMessage -d chat_id=${{ secrets.GROUP_CHAT_ID }} -d text="Follow progress here: $WORKFLOW_URL"
-    # Cleanup The Actions Workspace Using Custom Composite Run Actions
-       - name: Cleanup
-         uses: rokibhasansagar/slimhub_actions@main       
-       - name: Checkouts
-         uses: actions/checkout@v2
+               curl -s -X POST https://api.telegram.org/bot${{ secrets.TELEGRAM_TOKEN }}/sendMessage \
+               -d chat_id=${{ secrets.GROUP_CHAT_ID }} \
+               -d text="A new firmware dump PR workflow has started. Follow progress here: $WORKFLOW_URL"
 
-       - name: Clone Our Firmware Dumper
+       # Skip if from a forked repo to prevent exposing secrets
+       - name: Check if PR is from a fork
+         id: fork-check
+         run: |
+           if [ "${{ github.event.pull_request.head.repo.full_name }}" != "${{ github.repository }}" ]; then
+             echo "This is a forked repository, skipping sensitive steps."
+             echo "isForked=true" >> $GITHUB_ENV
+           else
+             echo "isForked=false" >> $GITHUB_ENV
+
+       # Run dumper only if not from a forked repo
+       - name: Clone and Setup DumperX
+         if: env.isForked == 'false'
          run: |
               git clone https://github.com/DumprX/DumprX.git DumprX
-
-       - name: Setup DumprX's Environment
-         working-directory: DumprX
-         run: |
-
+              cd DumprX
               sudo bash setup.sh
-              sudo apt install -y f2fs-tools
-              sudo apt install neofetch -y
+              sudo apt install -y f2fs-tools neofetch
               mkdir -p ~/.ssh
               ssh-keyscan -t rsa github.com >> ~/.ssh/known_hosts
               ssh-keyscan -t rsa gitlab.com >> ~/.ssh/known_hosts
               git config --global user.name "Galax1eo"
               git config --global user.email "galaxieodelight@gmail.com"
 
-       - name: Setup Config envs
+       - name: Setup Config envs (Only for internal PRs)
+         if: env.isForked == 'false'
          working-directory: DumprX
          run: |
-              # echo "${{ secrets.GIT_TOKEN }}" > .github_token
-              # echo "${{ secrets.GIT_ORG_NAME }}" > .github_orgname
               echo "${{ secrets.GITLAB_TOKEN }}" > .gitlab_token  # Only for Gitlab
               echo "${{ secrets.GITLAB_GROUP }}" > .gitlab_group  # Only for Gitlab
               echo "${{ secrets.GITLAB_INSTANCE }}" > .gitlab_instance  # Only for Gitlab
@@ -77,27 +82,26 @@ jobs:
               echo "${{ secrets.CHAT_ID }}" > .tg_chat
               chmod 600 ~/.ssh/id_rsa
               if grep -q "HOST \*" ~/.ssh/config && grep -q "StrictHostKeyChecking no" ~/.ssh/config; then
-
-              echo "Changes are already present"
-
+                echo "SSH config already updated"
               else
-
-              echo "HOST *" > ~/.ssh/config
-
-              echo "StrictHostKeyChecking no" >> ~/.ssh/config
-
+                echo "HOST *" > ~/.ssh/config
+                echo "StrictHostKeyChecking no" >> ~/.ssh/config
               fi
 
-       - name: Run the Extra Command
+       - name: Run Extra Command (If Provided)
+         if: env.isForked == 'false' && ${{ github.event.inputs.EXTRA_CMD != '' }}
          working-directory: DumprX
          run: |
               $EXTRA_CMD
 
-       - name: Start Dumping
+       - name: Start Dumping Firmware (Only for internal PRs)
+         if: env.isForked == 'false'
          working-directory: DumprX
          run: |
               ./dumper.sh "$ROM_URL"
-       - name: Telegram Notification
+
+       # Notify if the job fails or gets cancelled
+       - name: Telegram Notification for Failed Jobs
          if: ${{ cancelled() || failure() }}
          continue-on-error: true
          uses: xinthink/action-telegram@v1.1
